@@ -1,0 +1,131 @@
+---
+# dev namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+  labels:
+    app: latina
+    environment: dev
+
+---
+# test namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test
+  labels:
+    app: latina
+    environment: test
+
+---
+# prod namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+  labels:
+    app: latina
+    environment: prod
+
+---
+# NetworkPolicy: isolate each namespace so pods cannot
+# cross-communicate between environments.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-cross-namespace
+  namespace: dev
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dev
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-cross-namespace
+  namespace: test
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: test
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-cross-namespace
+  namespace: prod
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: prod
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+
+---
+# ResourceQuota: keep dev/test resource usage bounded on the shared node.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: latina-quota
+  namespace: dev
+spec:
+  hard:
+    requests.cpu: "1"
+    requests.memory: "1Gi"
+    limits.cpu: "2"
+    limits.memory: "2Gi"
+    pods: "10"
+
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: latina-quota
+  namespace: test
+spec:
+  hard:
+    requests.cpu: "1"
+    requests.memory: "1Gi"
+    limits.cpu: "2"
+    limits.memory: "2Gi"
+    pods: "10"
+
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: latina-quota
+  namespace: prod
+spec:
+  hard:
+    requests.cpu: "1"
+    requests.memory: "1Gi"
+    limits.cpu: "2"
+    limits.memory: "2Gi"
+    pods: "20"

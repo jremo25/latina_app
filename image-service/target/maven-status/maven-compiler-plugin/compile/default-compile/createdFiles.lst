@@ -1,0 +1,5 @@
+com/inspire/image/ImageNotFoundException.class
+com/inspire/image/ImageService.class
+com/inspire/image/ImageServiceException.class
+com/inspire/image/ImageApplication.class
+com/inspire/image/ImageController.class

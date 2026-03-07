@@ -1,0 +1,40 @@
+parameters:
+- name: sourceAcrConnection
+  type: string
+- name: sourceAcrLoginServer
+  type: string
+- name: targetAcrConnection
+  type: string
+- name: targetAcrLoginServer
+  type: string
+- name: imageRepository
+  type: string
+- name: imageTag
+  type: string
+
+steps:
+# 1. Login to the Source ACR
+- task: Docker@2
+  displayName: 'Login to Source ACR'
+  inputs:
+    command: 'login'
+    containerRegistry: ${{ parameters.sourceAcrConnection }}
+
+# 2. Pull the image from the Source ACR
+- script: |
+    docker pull ${{ parameters.sourceAcrLoginServer }}/${{ parameters.imageRepository }}:${{ parameters.imageTag }}
+  displayName: 'Pull Image from Source Environment'
+
+# 3. Tag the image for the Target ACR
+- script: |
+    docker tag ${{ parameters.sourceAcrLoginServer }}/${{ parameters.imageRepository }}:${{ parameters.imageTag }} ${{ parameters.targetAcrLoginServer }}/${{ parameters.imageRepository }}:${{ parameters.imageTag }}
+  displayName: 'Tag Image for Target Environment'
+
+# 4. Push the newly tagged image to the Target ACR
+- task: Docker@2
+  displayName: 'Push Image to Target ACR'
+  inputs:
+    command: 'push'
+    containerRegistry: ${{ parameters.targetAcrConnection }}
+    repository: ${{ parameters.imageRepository }}
+    tags: ${{ parameters.imageTag }}

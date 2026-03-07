@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: inspire-ingress
+  namespace: inspire
+  annotations:
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /api/image
+            pathType: Prefix
+            backend:
+              service:
+                name: image-service
+                port:
+                  number: 80
+          - path: /api/phrase
+            pathType: Prefix
+            backend:
+              service:
+                name: phrase-service
+                port:
+                  number: 80
+          - path: /api/config
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80

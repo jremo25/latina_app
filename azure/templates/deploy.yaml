@@ -1,0 +1,139 @@
+parameters:
+- name: environmentName
+  type: string
+- name: namespace
+  type: string
+- name: aksServiceConnection
+  type: string
+- name: targetAcrConnection
+  type: string
+- name: targetAcrLoginServer
+  type: string
+- name: imageRepository
+  type: string
+- name: imageTag
+  type: string
+- name: serviceName
+  type: string
+- name: promoteImage
+  type: boolean
+  default: false
+- name: sourceAcrConnection
+  type: string
+  default: ''
+- name: sourceAcrLoginServer
+  type: string
+  default: ''
+- name: imageUrl
+  type: string
+  default: ''
+- name: phraseUrl
+  type: string
+  default: ''
+
+jobs:
+# ── Job 1: Check out the repo, inject variables, publish manifest as artifact ──
+- job: Prepare_${{ parameters.environmentName }}
+  displayName: 'Prepare Manifest for ${{ parameters.environmentName }}'
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+  - checkout: self
+
+  - script: |
+      SERVICE_NAME="${{ parameters.serviceName }}"
+      IMAGE_URL="${{ parameters.targetAcrLoginServer }}/${{ parameters.imageRepository }}:${{ parameters.imageTag }}"
+      NAMESPACE="${{ parameters.namespace }}"
+
+      # Update deployment manifest
+      sed -i "s|<ACR_LOGIN_SERVER>|${{ parameters.targetAcrLoginServer }}|g" ${SERVICE_NAME}/k8s/deployment.yaml
+      sed -i "s|#{IMAGE_TAG}#|${{ parameters.imageTag }}|g" ${SERVICE_NAME}/k8s/deployment.yaml
+
+      # Update namespace in manifests
+      sed -i "s|namespace: inspire|namespace: ${NAMESPACE}|g" ${SERVICE_NAME}/k8s/service.yaml
+      sed -i "s|namespace: inspire|namespace: ${NAMESPACE}|g" ${SERVICE_NAME}/k8s/deployment.yaml
+
+      # For frontend-service, inject service URLs
+      if [ "$SERVICE_NAME" = "frontend-service" ]; then
+        sed -i "s|#{IMAGE_SERVICE_URL}#|${{ parameters.imageUrl }}|g" ${SERVICE_NAME}/k8s/deployment.yaml
+        sed -i "s|#{PHRASE_SERVICE_URL}#|${{ parameters.phraseUrl }}|g" ${SERVICE_NAME}/k8s/deployment.yaml
+      fi
+
+      echo "Manifest after substitution:"
+      cat ${SERVICE_NAME}/k8s/deployment.yaml
+    displayName: 'Inject Variables into Manifest'
+
+  - publish: ${{ parameters.serviceName }}/k8s
+    artifact: manifest-${{ parameters.serviceName }}-${{ parameters.environmentName }}
+    displayName: 'Publish Manifest Artifact'
+
+# ── Job 2: Promote image (optional) then deploy to AKS ────────────────────────
+- deployment: Deploy_${{ parameters.environmentName }}
+  displayName: 'Deploy to ${{ parameters.environmentName }}'
+  dependsOn: Prepare_${{ parameters.environmentName }}
+  environment: ${{ parameters.environmentName }}
+  pool:
+    vmImage: 'ubuntu-latest'
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+        # Conditionally promote the image between ACRs
+        - ${{ if eq(parameters.promoteImage, true) }}:
+          - template: promote-acr.yaml
+            parameters:
+              sourceAcrConnection: ${{ parameters.sourceAcrConnection }}
+              sourceAcrLoginServer: ${{ parameters.sourceAcrLoginServer }}
+              targetAcrConnection: ${{ parameters.targetAcrConnection }}
+              targetAcrLoginServer: ${{ parameters.targetAcrLoginServer }}
+              imageRepository: ${{ parameters.imageRepository }}
+              imageTag: ${{ parameters.imageTag }}
+
+        # Download the manifest artifact published by the Prepare job
+        - download: current
+          artifact: manifest-${{ parameters.serviceName }}-${{ parameters.environmentName }}
+          displayName: 'Download Manifest Artifact'
+
+        # Ensure the namespace exists before deploying resources into it
+        - task: Kubernetes@1
+          displayName: 'Ensure Namespace Exists: ${{ parameters.namespace }}'
+          inputs:
+            connectionType: 'Kubernetes Service Connection'
+            kubernetesServiceEndpoint: '${{ parameters.aksServiceConnection }}'
+            command: 'apply'
+            useConfigurationFile: true
+            inline: |
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: ${{ parameters.namespace }}
+
+        # Deploy service
+        - task: KubernetesManifest@1
+          displayName: 'Deploy Service to AKS'
+          inputs:
+            action: 'deploy'
+            connectionType: 'kubernetesServiceConnection'
+            kubernetesServiceConnection: '${{ parameters.aksServiceConnection }}'
+            namespace: '${{ parameters.namespace }}'
+            manifests: |
+              $(Pipeline.Workspace)/manifest-${{ parameters.serviceName }}-${{ parameters.environmentName }}/service.yaml
+
+        # Deploy deployment
+        - task: KubernetesManifest@1
+          displayName: 'Deploy to AKS Namespace: ${{ parameters.namespace }}'
+          inputs:
+            action: 'deploy'
+            connectionType: 'kubernetesServiceConnection'
+            kubernetesServiceConnection: '${{ parameters.aksServiceConnection }}'
+            namespace: '${{ parameters.namespace }}'
+            manifests: |
+              $(Pipeline.Workspace)/manifest-${{ parameters.serviceName }}-${{ parameters.environmentName }}/deployment.yaml
+
+        # Wait for rollout
+        - script: |
+            kubectl rollout status deployment/${{ parameters.serviceName }} -n ${{ parameters.namespace }} --timeout=300s
+            echo ""
+            echo "=== Deployment Status ==="
+            kubectl get pods -n ${{ parameters.namespace }} -l app=${{ parameters.serviceName }}
+          displayName: 'Verify Deployment'

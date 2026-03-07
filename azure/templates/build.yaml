@@ -1,0 +1,36 @@
+parameters:
+  - name: jdkVersion
+    type: string
+    default: '1.21'
+  - name: serviceName
+    type: string
+  - name: devAcrConnection
+    type: string
+  - name: imageRepository
+    type: string
+
+steps:
+# 1. Maven Build & Test
+- task: Maven@4
+  displayName: 'Maven Build & Test'
+  inputs:
+    mavenPomFile: 'pom.xml'
+    goals: 'clean package'
+    options: '-pl ${{ parameters.serviceName }} -am'
+    publishJUnitResults: true
+    testResultsFiles: '**/surefire-reports/TEST-*.xml'
+    javaHomeOption: 'JDKVersion'
+    jdkVersionOption: ${{ parameters.jdkVersion }}
+
+# 2. Build and Push directly to the Dev ACR
+- task: Docker@2
+  displayName: 'Build and Push to Dev ACR'
+  inputs:
+    containerRegistry: ${{ parameters.devAcrConnection }}
+    repository: ${{ parameters.imageRepository }}
+    command: 'buildAndPush'
+    Dockerfile: '${{ parameters.serviceName }}/Dockerfile'
+    buildContext: '.'
+    tags: |
+      $(Build.BuildId)
+      latest

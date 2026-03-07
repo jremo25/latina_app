@@ -1,0 +1,54 @@
+# ============================================================
+# Ingress rules for the namespace
+# Requires: AKS Web App Routing addon (enabled in main.json)
+# Routes all API traffic through a single public IP, so the
+# frontend can use relative paths instead of internal k8s names.
+# ============================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: latina-ingress
+  namespace: dev
+  annotations:
+    # Allow the frontend to call APIs without CORS issues
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+spec:
+  ingressClassName: webapprouting.kubernetes.azure.com
+  rules:
+  - http:
+      paths:
+
+      # ── Image Service API ────────────────────────────────────
+      # Proxies: /api/image/* → image-service:80/api/image/*
+      # Must be listed BEFORE the catch-all / rule
+      - path: /api/image
+        pathType: Prefix
+        backend:
+          service:
+            name: image-service
+            port:
+              number: 80
+
+      # ── Phrase Service API ───────────────────────────────────
+      # Proxies: /api/phrase/* → phrase-service:80/api/phrase/*
+      # Must be listed BEFORE the catch-all / rule
+      - path: /api/phrase
+        pathType: Prefix
+        backend:
+          service:
+            name: phrase-service
+            port:
+              number: 80
+
+      # ── Frontend ────────────────────────────────────────────
+      # Catch-all: serve the frontend app for any unmatched path
+      # Must be listed LAST so it doesn't swallow API routes
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend-service
+            port:
+              number: 80

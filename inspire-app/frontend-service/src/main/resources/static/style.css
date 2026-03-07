@@ -1,0 +1,362 @@
+/* ── Design: Darkroom Editorial ────────────────────────────────────────────────
+   Deep black paper, amber safelight accents, Playfair Display serif headlines,
+   Crimson Pro body. The feel of a photography darkroom — intimate, revelatory.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+:root {
+    --black:       #0a0a0a;
+    --deep:        #111111;
+    --surface:     #1a1a18;
+    --border:      #2a2a26;
+    --amber:       #e8a020;
+    --amber-pale:  #f5c96a;
+    --amber-dim:   #7a5210;
+    --white:       #f0ede6;
+    --white-dim:   #8a877e;
+    --error:       #c0392b;
+
+    --font-display: 'Playfair Display', Georgia, serif;
+    --font-body:    'Crimson Pro', 'Georgia', serif;
+
+    --radius:  2px;
+    --transition: 420ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 16px; }
+
+body {
+    background: var(--black);
+    color: var(--white);
+    font-family: var(--font-body);
+    min-height: 100dvh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas: "header" "stage" "trigger";
+    overflow-x: hidden;
+}
+
+/* ── Film grain overlay ──────────────────────────────────────────────────────── */
+.grain {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 100;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 128px;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────────── */
+.site-header {
+    grid-area: header;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 28px 40px 20px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+}
+
+.logo-mark {
+    color: var(--amber);
+    font-size: 1.1rem;
+    animation: pulse-amber 3s ease-in-out infinite;
+}
+
+.logo-text {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--white);
+    letter-spacing: 0.25em;
+}
+
+.logo-sub {
+    font-size: 0.7rem;
+    color: var(--white-dim);
+    letter-spacing: 0.2em;
+}
+
+@keyframes pulse-amber {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ── Stage ───────────────────────────────────────────────────────────────────── */
+.stage {
+    grid-area: stage;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    position: relative;
+    min-height: 0;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────────── */
+.empty-state {
+    text-align: center;
+    animation: fade-in 1s ease both;
+}
+
+.empty-eyebrow {
+    font-family: var(--font-body);
+    font-style: italic;
+    font-size: 1rem;
+    color: var(--amber-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.empty-headline {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(1.8rem, 5vw, 3.2rem);
+    color: var(--white-dim);
+    font-weight: 400;
+}
+
+/* ── Card ────────────────────────────────────────────────────────────────────── */
+.card {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    max-width: 680px;
+    animation: card-reveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.card.visible {
+    display: flex;
+}
+
+@keyframes card-reveal {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Image wrapper */
+.card-image-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+
+.card-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.6s ease;
+}
+
+.card:hover .card-image { transform: scale(1.02); }
+
+.card-image-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        to bottom,
+        transparent 55%,
+        rgba(10, 10, 10, 0.7) 100%
+    );
+    pointer-events: none;
+}
+
+/* Phrase */
+.card-phrase-wrap {
+    padding: 28px 4px 0;
+}
+
+.card-phrase {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(1.2rem, 3.5vw, 1.85rem);
+    font-weight: 400;
+    line-height: 1.45;
+    color: var(--white);
+    border: none;
+    position: relative;
+    padding-left: 20px;
+}
+
+.card-phrase::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    background: var(--amber);
+}
+
+.card-divider {
+    margin-top: 20px;
+    height: 1px;
+    background: linear-gradient(to right, var(--amber-dim), transparent);
+}
+
+/* ── Skeleton loader ─────────────────────────────────────────────────────────── */
+.skeleton {
+    width: 100%;
+    max-width: 680px;
+}
+
+.skeleton-image {
+    width: 100%;
+    aspect-ratio: 4/3;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-line {
+    height: 22px;
+    background: var(--surface);
+    margin-top: 20px;
+    animation: shimmer 1.4s ease-in-out infinite;
+    animation-delay: 0.1s;
+}
+
+.skeleton-line--short {
+    width: 60%;
+    animation-delay: 0.2s;
+}
+
+@keyframes shimmer {
+    0%, 100% { opacity: 0.4; }
+    50%       { opacity: 0.8; }
+}
+
+/* ── Error box ───────────────────────────────────────────────────────────────── */
+.error-box {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    max-width: 520px;
+    padding: 20px 24px;
+    border: 1px solid var(--error);
+    background: rgba(192, 57, 43, 0.08);
+    animation: fade-in 0.3s ease both;
+}
+
+.error-icon {
+    font-size: 1.2rem;
+    color: var(--error);
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.error-box p {
+    font-family: var(--font-body);
+    font-size: 1rem;
+    color: var(--white);
+    line-height: 1.55;
+}
+
+/* ── Trigger zone ────────────────────────────────────────────────────────────── */
+.trigger-zone {
+    grid-area: trigger;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 32px 24px 44px;
+    border-top: 1px solid var(--border);
+}
+
+/* The button */
+.inspire-btn {
+    position: relative;
+    background: transparent;
+    border: 1px solid var(--amber);
+    color: var(--amber);
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--font-display);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-size: 0.9rem;
+    font-weight: 700;
+    transition: color var(--transition), background var(--transition);
+    overflow: visible;
+}
+
+.btn-inner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 36px;
+    position: relative;
+    z-index: 1;
+}
+
+.btn-arrow {
+    transition: transform var(--transition);
+    display: inline-block;
+}
+
+.inspire-btn:hover {
+    background: var(--amber);
+    color: var(--black);
+}
+
+.inspire-btn:hover .btn-arrow { transform: translateX(6px); }
+
+.inspire-btn:active { transform: scale(0.97); }
+
+.inspire-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Ripple ring on click */
+.btn-ring {
+    position: absolute;
+    inset: -8px;
+    border: 1px solid var(--amber);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.inspire-btn:focus-visible .btn-ring {
+    animation: ring-pulse 0.6s ease forwards;
+}
+
+@keyframes ring-pulse {
+    from { opacity: 0.7; transform: scale(0.94); }
+    to   { opacity: 0;   transform: scale(1.1); }
+}
+
+.trigger-hint {
+    font-family: var(--font-body);
+    font-style: italic;
+    font-size: 0.8rem;
+    color: var(--white-dim);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    transition: opacity var(--transition);
+}
+
+/* ── Utilities ───────────────────────────────────────────────────────────────── */
+@keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+[hidden] { display: none !important; }
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+    .site-header { padding: 20px 20px 16px; }
+    .stage { padding: 28px 16px; }
+    .trigger-zone { padding: 24px 16px 36px; }
+    .card-phrase { font-size: 1.1rem; }
+}
