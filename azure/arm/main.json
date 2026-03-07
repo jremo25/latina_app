@@ -129,7 +129,7 @@
         "agentPoolProfiles": [
           {
             "name": "system",
-            "count": 1,
+            "count": 2,
             "vmSize": "Standard_D2s_v3",
             "osType": "Linux",
             "osDiskSizeGB": 30,
