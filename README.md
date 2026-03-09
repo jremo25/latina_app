@@ -3,7 +3,7 @@
 This guide covers deploying the **Latina App** to Azure Kubernetes Service (AKS) using the ARM template and Azure DevOps (ADO) pipelines.
 
 **Repositories:**
-- App source: https://github.com/denisdbell/latina_app
+- App source: https://github.com/jremo25/latina_app
 - Pipeline templates: https://github.com/denisdbell/latina_app_template
 
 ---
