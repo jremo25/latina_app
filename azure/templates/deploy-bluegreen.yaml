@@ -1,0 +1,203 @@
+parameters:
+- name: environmentName
+  type: string
+- name: namespace
+  type: string
+- name: aksServiceConnection
+  type: string
+- name: targetAcrConnection
+  type: string
+- name: targetAcrLoginServer
+  type: string
+- name: imageRepository
+  type: string
+- name: imageTag
+  type: string
+- name: serviceName
+  type: string
+- name: promoteImage
+  type: boolean
+  default: false
+- name: sourceAcrConnection
+  type: string
+  default: ''
+- name: sourceAcrLoginServer
+  type: string
+  default: ''
+- name: imageUrl
+  type: string
+  default: ''
+- name: phraseUrl
+  type: string
+  default: ''
+
+jobs:
+# ── Job 1: Detect active slot and prepare manifests ──────────────────────────
+- job: Prepare_${{ parameters.environmentName }}
+  displayName: 'Prepare Manifest for ${{ parameters.environmentName }}'
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+  - checkout: self
+
+  # Authenticate via Kubernetes service connection to detect the current slot
+  - task: Kubernetes@1
+    name: getSlot
+    displayName: 'Detect Active Slot from Service'
+    continueOnError: true
+    inputs:
+      connectionType: 'Kubernetes Service Connection'
+      kubernetesServiceEndpoint: '${{ parameters.aksServiceConnection }}'
+      command: 'get'
+      arguments: 'svc ${{ parameters.serviceName }} -n ${{ parameters.namespace }} -o jsonpath={.spec.selector.slot}'
+
+  - script: |
+      ACTIVE_SLOT="$(getSlot.KubectlOutput)"
+      ACTIVE_SLOT=$(echo "$ACTIVE_SLOT" | tr -d '[:space:]')
+
+      # Validate: must be "blue" or "green", otherwise first deployment
+      if [ "$ACTIVE_SLOT" != "blue" ] && [ "$ACTIVE_SLOT" != "green" ]; then
+        echo "No valid active slot detected (got: '${ACTIVE_SLOT}')."
+        echo "First deployment — will deploy to blue."
+        ACTIVE_SLOT="none"
+        TARGET_SLOT="blue"
+      else
+        if [ "$ACTIVE_SLOT" = "blue" ]; then
+          TARGET_SLOT="green"
+        else
+          TARGET_SLOT="blue"
+        fi
+      fi
+
+      echo "Active slot: ${ACTIVE_SLOT}"
+      echo "Target slot: ${TARGET_SLOT}"
+      echo "##vso[task.setvariable variable=activeSlot;isOutput=true]${ACTIVE_SLOT}"
+      echo "##vso[task.setvariable variable=targetSlot;isOutput=true]${TARGET_SLOT}"
+
+      SERVICE_NAME="${{ parameters.serviceName }}"
+
+      # Substitute deployment manifest placeholders
+      sed -i "s|#{SLOT}#|${TARGET_SLOT}|g" ${SERVICE_NAME}/k8s/deployment-bluegreen.yaml
+      sed -i "s|<ACR_LOGIN_SERVER>|${{ parameters.targetAcrLoginServer }}|g" ${SERVICE_NAME}/k8s/deployment-bluegreen.yaml
+      sed -i "s|#{IMAGE_TAG}#|${{ parameters.imageTag }}|g" ${SERVICE_NAME}/k8s/deployment-bluegreen.yaml
+      sed -i "s|namespace: inspire|namespace: ${{ parameters.namespace }}|g" ${SERVICE_NAME}/k8s/deployment-bluegreen.yaml
+
+      # For frontend-service, inject backend service URLs
+      if [ "$SERVICE_NAME" = "frontend-service" ]; then
+        sed -i "s|#{IMAGE_SERVICE_URL}#|${{ parameters.imageUrl }}|g" ${SERVICE_NAME}/k8s/deployment-bluegreen.yaml
+        sed -i "s|#{PHRASE_SERVICE_URL}#|${{ parameters.phraseUrl }}|g" ${SERVICE_NAME}/k8s/deployment-bluegreen.yaml
+      fi
+
+      echo "=== Deployment manifest after substitution ==="
+      cat ${SERVICE_NAME}/k8s/deployment-bluegreen.yaml
+    name: detectSlot
+    displayName: 'Determine Target Slot and Prepare Manifests'
+
+  - publish: ${{ parameters.serviceName }}/k8s
+    artifact: manifest-${{ parameters.serviceName }}-${{ parameters.environmentName }}
+    displayName: 'Publish Manifest Artifact'
+
+# ── Job 2: Deploy to the inactive slot ───────────────────────────────────────
+- deployment: Deploy_${{ parameters.environmentName }}
+  displayName: 'Deploy to ${{ parameters.environmentName }} (Inactive Slot)'
+  dependsOn: Prepare_${{ parameters.environmentName }}
+  environment: ${{ parameters.environmentName }}
+  pool:
+    vmImage: 'ubuntu-latest'
+  variables:
+    targetSlot: $[ dependencies.Prepare_${{ parameters.environmentName }}.outputs['detectSlot.targetSlot'] ]
+    activeSlot: $[ dependencies.Prepare_${{ parameters.environmentName }}.outputs['detectSlot.activeSlot'] ]
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+        # Conditionally promote the image between ACRs
+        - ${{ if eq(parameters.promoteImage, true) }}:
+          - template: promote-acr.yaml
+            parameters:
+              sourceAcrConnection: ${{ parameters.sourceAcrConnection }}
+              sourceAcrLoginServer: ${{ parameters.sourceAcrLoginServer }}
+              targetAcrConnection: ${{ parameters.targetAcrConnection }}
+              targetAcrLoginServer: ${{ parameters.targetAcrLoginServer }}
+              imageRepository: ${{ parameters.imageRepository }}
+              imageTag: ${{ parameters.imageTag }}
+
+        # Download the manifest artifact
+        - download: current
+          artifact: manifest-${{ parameters.serviceName }}-${{ parameters.environmentName }}
+          displayName: 'Download Manifest Artifact'
+
+        # Ensure the namespace exists
+        - task: Kubernetes@1
+          displayName: 'Ensure Namespace Exists: ${{ parameters.namespace }}'
+          inputs:
+            connectionType: 'Kubernetes Service Connection'
+            kubernetesServiceEndpoint: '${{ parameters.aksServiceConnection }}'
+            command: 'apply'
+            useConfigurationFile: true
+            configurationType: 'inline'
+            inline: |
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: ${{ parameters.namespace }}
+
+        # Create service with slot selector (first deploy only).
+        # On subsequent deploys, kubectl create fails because it already exists
+        # and continueOnError lets the pipeline proceed — preserving the
+        # current service selector (no accidental traffic reset).
+        - task: Kubernetes@1
+          displayName: 'Create Service (first deploy only)'
+          continueOnError: true
+          inputs:
+            connectionType: 'Kubernetes Service Connection'
+            kubernetesServiceEndpoint: '${{ parameters.aksServiceConnection }}'
+            command: 'create'
+            useConfigurationFile: true
+            configurationType: 'inline'
+            inline: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: ${{ parameters.serviceName }}
+                namespace: ${{ parameters.namespace }}
+                labels:
+                  app: ${{ parameters.serviceName }}
+              spec:
+                selector:
+                  app: ${{ parameters.serviceName }}
+                  slot: $(targetSlot)
+                ports:
+                - name: http
+                  port: 80
+                  targetPort: 8080
+                type: ClusterIP
+
+        # Deploy to the inactive slot
+        - task: KubernetesManifest@1
+          displayName: 'Deploy to $(targetSlot) Slot'
+          inputs:
+            action: 'deploy'
+            connectionType: 'kubernetesServiceConnection'
+            kubernetesServiceConnection: '${{ parameters.aksServiceConnection }}'
+            namespace: '${{ parameters.namespace }}'
+            manifests: |
+              $(Pipeline.Workspace)/manifest-${{ parameters.serviceName }}-${{ parameters.environmentName }}/deployment-bluegreen.yaml
+
+        # Wait for deployment to become available
+        - task: Kubernetes@1
+          displayName: 'Wait for Deployment Ready'
+          inputs:
+            connectionType: 'Kubernetes Service Connection'
+            kubernetesServiceEndpoint: '${{ parameters.aksServiceConnection }}'
+            command: 'wait'
+            arguments: '--for=condition=Available deployment/${{ parameters.serviceName }}-$(targetSlot) -n ${{ parameters.namespace }} --timeout=300s'
+
+        # Show pod status for verification
+        - task: Kubernetes@1
+          displayName: 'Verify Pod Health'
+          inputs:
+            connectionType: 'Kubernetes Service Connection'
+            kubernetesServiceEndpoint: '${{ parameters.aksServiceConnection }}'
+            command: 'get'
+            arguments: 'pods -n ${{ parameters.namespace }} -l app=${{ parameters.serviceName }},slot=$(targetSlot) -o wide'

@@ -5,9 +5,11 @@ metadata:
   namespace: inspire
   labels:
     app: phrase-service
+    slot: blue
 spec:
   selector:
     app: phrase-service
+    slot: blue
   ports:
   - name: http
     port: 80

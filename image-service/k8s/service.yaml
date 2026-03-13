@@ -5,9 +5,11 @@ metadata:
   namespace: inspire
   labels:
     app: image-service
+    slot: blue
 spec:
   selector:
     app: image-service
+    slot: blue
   ports:
   - name: http
     port: 80

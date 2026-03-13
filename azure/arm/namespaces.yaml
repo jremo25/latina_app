@@ -124,8 +124,9 @@ metadata:
   namespace: prod
 spec:
   hard:
-    requests.cpu: "1"
-    requests.memory: "1Gi"
-    limits.cpu: "2"
-    limits.memory: "2Gi"
-    pods: "20"
+    # Increased for blue-green deployment (2x replicas during transition)
+    requests.cpu: "2"
+    requests.memory: "2Gi"
+    limits.cpu: "4"
+    limits.memory: "4Gi"
+    pods: "30"

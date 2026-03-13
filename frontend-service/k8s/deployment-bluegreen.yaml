@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-service-#{SLOT}#
+  namespace: inspire
+  labels:
+    app: frontend-service
+    slot: #{SLOT}#
+    app.kubernetes.io/part-of: inspire-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend-service
+      slot: #{SLOT}#
+  template:
+    metadata:
+      labels:
+        app: frontend-service
+        slot: #{SLOT}#
+    spec:
+      containers:
+      - name: frontend-service
+        image: <ACR_LOGIN_SERVER>/frontend-service:#{IMAGE_TAG}#
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+          - name: IMAGE_SERVICE_URL
+            value: "#{IMAGE_SERVICE_URL}#"
+          - name: PHRASE_SERVICE_URL
+            value: "#{PHRASE_SERVICE_URL}#"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          failureThreshold: 3

@@ -1,0 +1,292 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - frontend-service/**
+      - pom.xml
+      - azure/pipelines/frontend-service-bluegreen.yml
+
+pool:
+  vmImage: ubuntu-latest
+
+resources:
+  repositories:
+    - repository: templates
+      type: git
+      name: LatinaApp2/latina_app_template
+      ref: working
+
+variables:
+  # AKS and Common Variables
+  aksServiceConnection: aks-service-connection
+  imageRepository: frontend-service
+
+  # UPDATE THIS VALUE: Replace with the uniqueSuffix from your ARM deployment output
+  uniqueSuffix: funvbtai
+
+  # Service URLs (update these based on your environment)
+  devImageUrl: http://image-service.dev.svc.cluster.local
+  devPhraseUrl: http://phrase-service.dev.svc.cluster.local
+  testImageUrl: http://image-service.test.svc.cluster.local
+  testPhraseUrl: http://phrase-service.test.svc.cluster.local
+  prodImageUrl: http://image-service.prod.svc.cluster.local
+  prodPhraseUrl: http://phrase-service.prod.svc.cluster.local
+
+  # Dev Environment
+  devAcrConnection: dev-acr-service-connection
+  devAcrLoginServer: acrlatinadev$(uniqueSuffix).azurecr.io
+
+  # Testing Environment
+  testAcrConnection: test-acr-service-connection
+  testAcrLoginServer: acrlatinatest$(uniqueSuffix).azurecr.io
+
+  # Prod Environment
+  prodAcrConnection: prod-acr-service-connection
+  prodAcrLoginServer: acrlatinaprod$(uniqueSuffix).azurecr.io
+
+stages:
+  # ── Build Stage ─────────────────────────────────────────────────────────────
+  - stage: Build
+    displayName: Build Frontend Service
+    jobs:
+      - job: BuildJob
+        steps:
+          - template: build.yaml@templates
+            parameters:
+              serviceName: frontend-service
+              devAcrConnection: $(devAcrConnection)
+              imageRepository: $(imageRepository)
+
+  # ── Deploy to Development ──────────────────────────────────────────────────
+  - stage: DeployDev
+    displayName: Deploy to Development
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - template: deploy.yaml@templates
+        parameters:
+          environmentName: dev
+          namespace: dev
+          aksServiceConnection: $(aksServiceConnection)
+          promoteImage: false
+          targetAcrConnection: $(devAcrConnection)
+          targetAcrLoginServer: $(devAcrLoginServer)
+          imageRepository: $(imageRepository)
+          imageTag: $(Build.BuildId)
+          serviceName: frontend-service
+          imageUrl: $(devImageUrl)
+          phraseUrl: $(devPhraseUrl)
+
+  # ── Manual Approval - Promote to Testing ────────────────────────────────────
+  - stage: ApproveTesting
+    displayName: Manual Approval - Promote to Testing
+    dependsOn: DeployDev
+    condition: succeeded()
+    jobs:
+      - job: WaitForApprovalTesting
+        pool: server
+        timeoutInMinutes: 1440
+        steps:
+          - task: ManualValidation@0
+            inputs:
+              instructions: >-
+                Dev deployment completed successfully.
+                Approve promotion to Testing environment.
+
+  # ── Deploy to Testing ──────────────────────────────────────────────────────
+  - stage: DeployTest
+    displayName: Deploy to Testing
+    dependsOn: ApproveTesting
+    condition: succeeded()
+    jobs:
+      - template: deploy.yaml@templates
+        parameters:
+          environmentName: testing
+          namespace: test
+          aksServiceConnection: $(aksServiceConnection)
+          promoteImage: true
+          sourceAcrConnection: $(devAcrConnection)
+          sourceAcrLoginServer: $(devAcrLoginServer)
+          targetAcrConnection: $(testAcrConnection)
+          targetAcrLoginServer: $(testAcrLoginServer)
+          imageRepository: $(imageRepository)
+          imageTag: $(Build.BuildId)
+          serviceName: frontend-service
+          imageUrl: $(testImageUrl)
+          phraseUrl: $(testPhraseUrl)
+
+  # ── Manual Approval - Promote to Production ──────────────────────────────────
+  - stage: ApproveProd
+    displayName: Manual Approval - Promote to Production
+    dependsOn: DeployTest
+    condition: succeeded()
+    jobs:
+      - job: WaitForApprovalProd
+        pool: server
+        timeoutInMinutes: 1440
+        steps:
+          - task: ManualValidation@0
+            inputs:
+              instructions: >-
+                Testing environment deployment completed successfully.
+                Verify all tests passed and deployment is stable.
+                Approve Production deployment (Blue-Green).
+
+  # ── Deploy to Production (Inactive Slot) ───────────────────────────────────
+  # Deploys the new version to whichever slot is NOT currently serving traffic.
+  # Traffic remains on the current slot until explicitly switched.
+  - stage: DeployProdInactive
+    displayName: Deploy to Production (Inactive Slot)
+    dependsOn: ApproveProd
+    condition: succeeded()
+    jobs:
+      - template: deploy-bluegreen.yaml@templates
+        parameters:
+          environmentName: prod
+          namespace: prod
+          aksServiceConnection: $(aksServiceConnection)
+          promoteImage: true
+          sourceAcrConnection: $(testAcrConnection)
+          sourceAcrLoginServer: $(testAcrLoginServer)
+          targetAcrConnection: $(prodAcrConnection)
+          targetAcrLoginServer: $(prodAcrLoginServer)
+          imageRepository: $(imageRepository)
+          imageTag: $(Build.BuildId)
+          serviceName: frontend-service
+          imageUrl: $(prodImageUrl)
+          phraseUrl: $(prodPhraseUrl)
+
+  # ── Test and Approve Traffic Switch ─────────────────────────────────────────
+  # The new version is running on the inactive slot. Test it before switching.
+  - stage: TestProdBlueGreen
+    displayName: Test and Approve Traffic Switch
+    dependsOn: DeployProdInactive
+    condition: succeeded()
+    variables:
+      targetSlot: $[ stageDependencies.DeployProdInactive.Prepare_prod.outputs['detectSlot.targetSlot'] ]
+      activeSlot: $[ stageDependencies.DeployProdInactive.Prepare_prod.outputs['detectSlot.activeSlot'] ]
+    jobs:
+      - job: DisplayTestInfo
+        displayName: Display Deployment Info
+        steps:
+          - task: Bash@3
+            displayName: 'Show Blue-Green Status'
+            inputs:
+              targetType: inline
+              script: |
+                echo "============================================================"
+                echo "  BLUE-GREEN DEPLOYMENT - PRODUCTION"
+                echo "============================================================"
+                echo ""
+                echo "  CURRENT LIVE SLOT:     $(activeSlot)"
+                echo "  NEW DEPLOYMENT SLOT:   $(targetSlot)"
+                echo "  BUILD:                 $(Build.BuildId)"
+                echo ""
+                echo "  The new version is running on the $(targetSlot) slot."
+                echo "  Live traffic is still on the $(activeSlot) slot."
+                echo ""
+                echo "  Test the $(targetSlot) deployment before approving"
+                echo "  the traffic switch below."
+                echo "============================================================"
+
+      - job: ApproveSwitch
+        displayName: Approve Traffic Switch
+        dependsOn: DisplayTestInfo
+        pool: server
+        timeoutInMinutes: 1440
+        steps:
+          - task: ManualValidation@0
+            inputs:
+              instructions: >-
+                BLUE-GREEN DEPLOYMENT - PRODUCTION
+
+                Current live slot: $(activeSlot)
+                New deployment slot: $(targetSlot) (Build $(Build.BuildId))
+
+                CHECKLIST:
+                - New deployment health checks pass
+                - Smoke tests completed successfully
+                - Performance within acceptable limits
+                - No critical errors in logs
+                - Stakeholder sign-off obtained
+
+                Approve to switch live traffic from $(activeSlot) to $(targetSlot).
+
+  # ── Switch Production Traffic ──────────────────────────────────────────────
+  # Patches the Kubernetes service selector to route traffic to the new slot.
+  # No pod restarts — instant switch.
+  - stage: SwitchTrafficProd
+    displayName: Switch Production Traffic
+    dependsOn:
+      - DeployProdInactive
+      - TestProdBlueGreen
+    condition: succeeded()
+    variables:
+      targetSlot: $[ stageDependencies.DeployProdInactive.Prepare_prod.outputs['detectSlot.targetSlot'] ]
+      activeSlot: $[ stageDependencies.DeployProdInactive.Prepare_prod.outputs['detectSlot.activeSlot'] ]
+    jobs:
+      - job: SwitchTraffic
+        displayName: 'Switch Traffic to $(targetSlot)'
+        steps:
+          # Patch service selector to route to new slot
+          - task: KubernetesManifest@1
+            displayName: 'Patch Service Selector to $(targetSlot)'
+            inputs:
+              action: 'patch'
+              connectionType: 'kubernetesServiceConnection'
+              kubernetesServiceConnection: '$(aksServiceConnection)'
+              namespace: 'prod'
+              resourceToPatch: 'name'
+              resourceName: 'services/frontend-service'
+              mergeStrategy: 'strategic'
+              patch: '{"spec":{"selector":{"slot":"$(targetSlot)"}}}'
+
+          # Verify endpoints are populated
+          - task: Kubernetes@1
+            displayName: 'Verify Endpoints'
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceEndpoint: '$(aksServiceConnection)'
+              command: 'get'
+              arguments: 'endpoints frontend-service -n prod'
+
+          # Show final service state
+          - task: Kubernetes@1
+            displayName: 'Show Service Selector'
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceEndpoint: '$(aksServiceConnection)'
+              command: 'get'
+              arguments: 'svc frontend-service -n prod -o jsonpath={.spec.selector}'
+
+  # ── Rollback Production (Manual) ───────────────────────────────────────────
+  # Instantly switches traffic back to the previous slot.
+  # Both slots remain running — no pod restarts needed.
+  - stage: RollbackProd
+    displayName: Rollback Production
+    dependsOn: SwitchTrafficProd
+    condition: succeeded()
+    jobs:
+      - deployment: ApproveRollback
+        environment: prod-rollback
+        pool: server
+        timeoutInMinutes: 1440
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: ManualValidation@0
+                  inputs:
+                    instructions: >-
+                      ROLLBACK: This will instantly switch traffic back to the
+                      previous deployment slot. Only approve if the current
+                      production deployment has issues.
+
+      - template: rollback.yaml@templates
+        parameters:
+          environmentName: prod
+          namespace: prod
+          aksServiceConnection: $(aksServiceConnection)
+          serviceName: frontend-service

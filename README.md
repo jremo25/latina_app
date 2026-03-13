@@ -6,6 +6,8 @@ This guide covers deploying the **Latina App** to Azure Kubernetes Service (AKS)
 - App source: https://github.com/denisdbell/latina_app
 - Pipeline templates: https://github.com/denisdbell/latina_app_template
 
+> **Important:** The blue-green deployment feature is on the `blue-green` branch. Make sure to use this branch when working with blue-green deployments.
+
 ---
 
 ## Architecture Overview
@@ -211,21 +213,219 @@ kubectl get ingress latina-ingress -n dev
 
 ---
 
-## Verify the Deployment
+## Blue-Green Deployment (Production)
+
+Blue-green deployment is a release strategy that reduces downtime and risk by running two identical production environments called **Blue** and **Green**. At any time, only one of these environments is live and receiving traffic.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    PRODUCTION NAMESPACE                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌─────────────────┐         ┌─────────────────┐                   │
+│   │   BLUE SLOT     │         │   GREEN SLOT    │                   │
+│   │   (v1.0)        │         │   (v2.0)        │                   │
+│   │   - Deployment  │         │   - Deployment  │                   │
+│   │   - Pods        │         │   - Pods        │                   │
+│   └─────────────────┘         └─────────────────┘                   │
+│           ▲                           ▲                             │
+│           │                           │                             │
+│           └───────────┬───────────────┘                             │
+│                       │                                              │
+│              ┌────────┴────────┐                                     │
+│              │     SERVICE     │                                     │
+│              │  selector: slot │                                     │
+│              │    = green      │  ◄── Traffic routes to Green        │
+│              └─────────────────┘                                     │
+│                       │                                              │
+│                       ▼                                              │
+│                  ┌─────────┐                                         │
+│                  │  INGRESS│                                         │
+│                  └─────────┘                                         │
+│                       │                                              │
+└───────────────────────┼─────────────────────────────────────────────┘
+                        ▼
+                   User Traffic
+```
+
+### Blue-Green Deployment Flow
+
+1. **Detect Active Slot** - The pipeline checks which slot (blue or green) is currently receiving traffic
+2. **Deploy to Inactive Slot** - New version deploys to the inactive slot without affecting live traffic
+3. **Health Verification** - Pipeline verifies all pods are healthy before proceeding
+4. **Manual Approval** - Requires approval to switch traffic
+5. **Traffic Switch** - Service selector is updated to route traffic to the new slot
+6. **Verification** - Confirms traffic is routing correctly
+7. **Instant Rollback** - If issues occur, traffic can be instantly switched back
+
+### Prerequisites for Blue-Green
+
+In addition to the standard prerequisites:
+
+1. **Branch Requirement**: Use the `blue-green` branch from both repositories:
+   ```bash
+   # Clone and checkout the blue-green branch
+   git clone https://github.com/denisdbell/latina_app.git
+   cd latina_app
+   git checkout blue-green
+
+   # For pipeline templates
+   git clone https://github.com/denisdbell/latina_app_template.git
+   cd latina_app_template
+   git checkout blue-green
+   ```
+
+2. **Service connections for each environment**:
+   - `dev-acr-service-connection` - Dev ACR
+   - `test-acr-service-connection` - Test ACR
+   - `prod-acr-service-connection` - Prod ACR
+   - `aks-service-connection` - Kubernetes cluster connection
+
+---
+
+## Step 6 — Create Blue-Green Deployment Pipeline
+
+### 6.1 Import Repositories
+
+Import both repositories into Azure DevOps (if not already done in Step 2):
+
+| Repository | URL |
+|------------|-----|
+| latina_app | https://github.com/denisdbell/latina_app |
+| latina_app_template | https://github.com/denisdbell/latina_app_template |
+
+> **Critical:** After importing, ensure you checkout the `blue-green` branch in both repos. The pipeline files reference templates from the template repo.
+
+### 6.2 Update Pipeline Template Reference
+
+In `azure/pipelines/frontend-service-bluegreen.yml`, verify the template repository reference:
+
+```yaml
+resources:
+  repositories:
+    - repository: templates
+      type: git
+      name: <project>/latina_app_template  # Your ADO project name
+      ref: blue-green                        # Must use blue-green branch
+```
+
+### 6.3 Configure Environment Variables
+
+Update the `uniqueSuffix` variable in the pipeline file to match your ARM deployment:
+
+```yaml
+variables:
+  uniqueSuffix: 'latina'   # ← must match your ARM deployment output
+```
+
+### 6.4 Create the Pipeline
+
+1. **Pipelines → New pipeline**
+2. Source: **Azure Repos Git** → select `latina_app`
+3. **Existing Azure Pipelines YAML file**
+4. Select: `azure/pipelines/frontend-service-bluegreen.yml`
+5. Click **Save** (do not run yet)
+
+### 6.5 Configure Environment Approvals
+
+For production blue-green deployments, configure environment approvals:
+
+1. Go to **Environments** under Pipelines
+2. Find the `prod` environment
+3. Click **⋯** → **Approvals and checks**
+4. Add **Approvals** with appropriate approvers
+
+---
+
+## Step 7 — Run Blue-Green Deployment
+
+### 7.1 Deployment Sequence
+
+Run pipelines in this order:
+
+1. `image-service` (standard deployment)
+2. `phrase-service` (standard deployment)
+3. `frontend-service-bluegreen` (blue-green deployment)
+
+### 7.2 Blue-Green Pipeline Stages
+
+```
+Build → Deploy Dev → [Approve] → Deploy Test → [Approve] → Deploy Prod Blue → Deploy Prod Green → [Test & Approve] → Traffic Switch
+```
+
+| Stage | Description |
+|-------|-------------|
+| Build | Builds and pushes Docker image to ACR |
+| Deploy Dev | Standard deployment to dev namespace |
+| Deploy Test | Standard deployment to test namespace (with image promotion) |
+| Deploy Prod Green | Deploys to Green slot (inactive) |
+| Deploy Prod Blue | Deploys to Blue slot |
+| Test Blue/Green | Manual validation of both deployments |
+| Traffic Switch | Switches service selector to new slot |
+
+### 7.3 Testing Before Traffic Switch
+
+After the blue and green deployments are complete, test both slots before approving traffic switch:
 
 ```bash
-# Check all pods are running
-kubectl get pods -n dev
+# Check both deployments are running
+kubectl get deployments -n prod -l app=frontend-service
 
-# Check services
-kubectl get svc -n dev
+# Expected output:
+# NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
+# frontend-service-blue   2/2     2            2           5m
+# frontend-service-green  2/2     2            2           10m
 
-# Check ingress
-kubectl get ingress -n dev
+# Check pods for each slot
+kubectl get pods -n prod -l app=frontend-service
 
-# Stream logs for a service
-kubectl logs -f <pod-name> -n dev
+# Check service selector (shows which slot receives traffic)
+kubectl get svc frontend-service -n prod -o jsonpath='{.spec.selector}'
 ```
+
+### 7.4 Manual Traffic Switch Approval
+
+During the `TestProdBlueGreen` stage:
+
+1. ADO displays test URLs for both blue and green deployments
+2. Manually test both deployments:
+   - Health endpoints
+   - API functionality
+   - Performance metrics
+3. Review the checklist displayed in the approval task
+4. Approve to switch traffic to the new slot
+
+### 7.5 Instant Rollback
+
+If issues are discovered after traffic switch:
+
+```bash
+# Get current active slot
+kubectl get svc frontend-service -n prod -o jsonpath='{.spec.selector.slot}'
+
+# Switch back to previous slot instantly (no pod restarts)
+# If current is "blue", switch to "green" (or vice versa)
+kubectl patch svc frontend-service -n prod -p '{"spec":{"selector":{"slot":"green"}}}'
+```
+
+Or trigger the manual rollback stage in the pipeline.
+
+---
+
+## Blue-Green Deployment Checklist
+
+Before approving traffic switch:
+
+- [ ] Blue deployment health check passes
+- [ ] Green deployment health check passes
+- [ ] Smoke tests completed on new deployment
+- [ ] Performance metrics within acceptable limits
+- [ ] No critical errors in logs
+- [ ] Previous deployment still running (fallback ready)
+- [ ] Stakeholder sign-off obtained
+- [ ] Rollback plan confirmed
 
 ---
 
