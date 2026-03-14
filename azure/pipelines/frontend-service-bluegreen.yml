@@ -15,8 +15,8 @@ resources:
   repositories:
     - repository: templates
       type: git
-      name: LatinaApp2/latina_app_template
-      ref: working
+      name: PetClinic/latina_app_template
+      ref: main
 
 variables:
   # AKS and Common Variables
@@ -24,7 +24,7 @@ variables:
   imageRepository: frontend-service
 
   # UPDATE THIS VALUE: Replace with the uniqueSuffix from your ARM deployment output
-  uniqueSuffix: funvbtai
+  uniqueSuffix: ddcimehi
 
   # Service URLs (update these based on your environment)
   devImageUrl: http://image-service.dev.svc.cluster.local
