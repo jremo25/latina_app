@@ -3,10 +3,8 @@
 This guide covers deploying the **Latina App** to Azure Kubernetes Service (AKS) using the ARM template and Azure DevOps (ADO) pipelines.
 
 **Repositories:**
-- App source: https://github.com/denisdbell/latina_app
-- Pipeline templates: https://github.com/denisdbell/latina_app_template
-
-> **Important:** The blue-green deployment feature is on the `blue-green` branch. Make sure to use this branch when working with blue-green deployments.
+- App source: https://github.com/jremo25/latina_app (branch: `blue-green`)
+- Pipeline templates: https://github.com/jremo25/latina_app_template (branch: `main`)
 
 ---
 
@@ -48,11 +46,10 @@ AKS Ingress (nginx)
 
 ## Step 1 — Deploy Azure Infrastructure
 
-### 1.1 Dowload the main.json
+### 1.1 Download the main.json
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/denisdbell/latina_app/refs/heads/main/azure/arm/main.json -o main.json
-
+curl -fsSL https://raw.githubusercontent.com/jremo25/latina_app/refs/heads/blue-green/azure/arm/main.json -o main.json
 ```
 
 ### 1.2 Create a resource group
@@ -78,7 +75,7 @@ az deployment group show \
   --query properties.outputs
 ```
 
-Keep a note of `acrLoginServer` and `aksName` — you will need them in later steps.
+Keep a note of the `uniqueSuffix` value — you will need it to update the pipeline files.
 
 ### 1.5 Connect kubectl to the cluster
 
@@ -89,7 +86,7 @@ az aks get-credentials --resource-group rg-latina --name aks-latina-shared
 ### 1.6 Create Kubernetes namespaces
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/denisdbell/latina_app/refs/heads/main/azure/arm/namespaces.yaml -o namespaces.yaml
+curl -fsSL https://raw.githubusercontent.com/jremo25/latina_app/refs/heads/blue-green/azure/arm/namespaces.yaml -o namespaces.yaml
 
 kubectl apply -f namespaces.yaml
 ```
@@ -99,8 +96,7 @@ This creates the `dev`, `test`, and `prod` namespaces with network isolation pol
 ### 1.7 Apply the ingress rules
 
 ```bash
-
-curl -fsSL https://raw.githubusercontent.com/denisdbell/latina_app/refs/heads/main/azure/arm/ingress.yaml -o ingress.yaml
+curl -fsSL https://raw.githubusercontent.com/jremo25/latina_app/refs/heads/blue-green/azure/arm/ingress.yaml -o ingress.yaml
 
 kubectl apply -f ingress.yaml
 ```
@@ -113,18 +109,21 @@ kubectl apply -f ingress.yaml
 
 In your Azure DevOps project, import both GitHub repos:
 
-1. **latina_app** — the main application (source of the pipeline YAML files)
-2. **latina_app_template** — the shared pipeline templates (referenced as `petclinic-pipeline-template` in the pipeline files)
+1. **latina_app** — the main application (branch: `blue-green`)
+2. **latina_app_template** — the shared pipeline templates (branch: `main`)
 
 To import: **Repos → Import repository → GitHub → paste the URL**.
 
 > The pipeline files reference the template repo as:
 > ```yaml
-> repository: templates
-> name: <project name>/latinac_app_template
-> ref: main
+> resources:
+>   repositories:
+>     - repository: templates
+>       type: git
+>       name: <YourADOProject>/latina_app_template
+>       ref: main
 > ```
-> Make sure the imported template repo is named accordingly in ADO, or update this reference in each pipeline file.
+> Replace `<YourADOProject>` with your Azure DevOps project name (e.g., `PetClinic`).
 
 ### 2.2 Create service connections
 
@@ -139,23 +138,25 @@ Go to **Project Settings → Service connections**.
 | Authentication method | Azure Subscription |
 | Cluster | `aks-latina-shared` |
 
-#### Container Registry connection
+#### Container Registry connections
 
-| Setting | Value |
-|---------|-------|
-| Type | Docker Registry → Azure Container Registry |
-| Name | `acr-service-connection` |
-| ACR | `acrlatinalatina` (or your suffix) |
+The ARM template creates 3 separate ACRs (dev, test, prod). Create a service connection for each:
 
-> The pipeline files reference three separate ACR connections (`dev-acr-service-connection`, `test-acr-service-connection`, `prod-acr-service-connection`). For a single shared ACR, create one service connection and set all three variables to the same connection name, or create three connections pointing to the same ACR.
+| Name | ACR |
+|------|-----|
+| `dev-acr-service-connection` | `acrlatinadev<uniqueSuffix>` |
+| `test-acr-service-connection` | `acrlatinatest<uniqueSuffix>` |
+| `prod-acr-service-connection` | `acrlatinaprod<uniqueSuffix>` |
+
+Type: **Docker Registry → Azure Container Registry** for each.
 
 ### 2.3 Update the `uniqueSuffix` variable
 
-In each pipeline file (`frontend-service.yml`, `image-service.yml`, `phrase-service.yml`), update the `uniqueSuffix` variable to match your ARM deployment:
+In each pipeline file (`frontend-service-bluegreen.yml`, `image-service.yml`, `phrase-service.yml`), update the `uniqueSuffix` variable to match the value from your ARM deployment output:
 
 ```yaml
 variables:
-  uniqueSuffix: 'latina'   # ← must match your ARM deployment
+  uniqueSuffix: 'abcd1234'   # ← replace with your ARM deployment output value
 ```
 
 ---
@@ -173,9 +174,11 @@ For each of the three services, create a pipeline pointing to its YAML file:
 |---------|--------------|
 | Image Service | `azure/pipelines/image-service.yml` |
 | Phrase Service | `azure/pipelines/phrase-service.yml` |
-| Frontend Service | `azure/pipelines/frontend-service.yml` |
+| Frontend Service (Blue-Green) | `azure/pipelines/frontend-service-bluegreen.yml` |
 
 5. Click **Save** (do not run yet).
+
+> **Note:** Only 1 pipeline is needed for the frontend blue-green deployment. Each run automatically detects the active slot and deploys to the opposite one.
 
 ---
 
@@ -264,78 +267,46 @@ Blue-green deployment is a release strategy that reduces downtime and risk by ru
 
 In addition to the standard prerequisites:
 
-1. **Branch Requirement**: Use the `blue-green` branch from both repositories:
-   ```bash
-   # Clone and checkout the blue-green branch
-   git clone https://github.com/denisdbell/latina_app.git
-   cd latina_app
-   git checkout blue-green
+1. **ADO Environments**: Create the following environments in **Pipelines → Environments**:
+   - `dev`
+   - `testing`
+   - `prod`
+   - `prod-rollback`
 
-   # For pipeline templates
-   git clone https://github.com/denisdbell/latina_app_template.git
-   cd latina_app_template
-   git checkout blue-green
-   ```
-
-2. **Service connections for each environment**:
-   - `dev-acr-service-connection` - Dev ACR
-   - `test-acr-service-connection` - Test ACR
-   - `prod-acr-service-connection` - Prod ACR
-   - `aks-service-connection` - Kubernetes cluster connection
+2. **Service connections** (created in Step 2):
+   - `dev-acr-service-connection` — Dev ACR
+   - `test-acr-service-connection` — Test ACR
+   - `prod-acr-service-connection` — Prod ACR
+   - `aks-service-connection` — Kubernetes cluster connection
 
 ---
 
-## Step 6 — Create Blue-Green Deployment Pipeline
+## Step 6 — Blue-Green Pipeline Setup
 
-### 6.1 Import Repositories
+The blue-green pipeline is already created in Step 3 (`frontend-service-bluegreen.yml`). Verify the following before running:
 
-Import both repositories into Azure DevOps (if not already done in Step 2):
+### 6.1 Verify Template Reference
 
-| Repository | URL |
-|------------|-----|
-| latina_app | https://github.com/denisdbell/latina_app |
-| latina_app_template | https://github.com/denisdbell/latina_app_template |
-
-> **Critical:** After importing, ensure you checkout the `blue-green` branch in both repos. The pipeline files reference templates from the template repo.
-
-### 6.2 Update Pipeline Template Reference
-
-In `azure/pipelines/frontend-service-bluegreen.yml`, verify the template repository reference:
+In `azure/pipelines/frontend-service-bluegreen.yml`, confirm the template repo reference matches your ADO project:
 
 ```yaml
 resources:
   repositories:
     - repository: templates
       type: git
-      name: <project>/latina_app_template  # Your ADO project name
-      ref: blue-green                        # Must use blue-green branch
+      name: PetClinic/latina_app_template   # ← your ADO project name
+      ref: main
 ```
 
-### 6.3 Configure Environment Variables
+### 6.2 Create Required ADO Environments
 
-Update the `uniqueSuffix` variable in the pipeline file to match your ARM deployment:
+Go to **Pipelines → Environments** and create:
+- `dev`
+- `testing`
+- `prod`
+- `prod-rollback`
 
-```yaml
-variables:
-  uniqueSuffix: 'latina'   # ← must match your ARM deployment output
-```
-
-### 6.4 Create the Pipeline
-
-1. **Pipelines → New pipeline**
-2. Source: **Azure Repos Git** → select `latina_app`
-3. **Existing Azure Pipelines YAML file**
-4. Select: `azure/pipelines/frontend-service-bluegreen.yml`
-5. Click **Save** (do not run yet)
-
-### 6.5 Configure Environment Approvals
-
-For production blue-green deployments, configure environment approvals:
-
-1. Go to **Environments** under Pipelines
-2. Find the `prod` environment
-3. Click **⋯** → **Approvals and checks**
-4. Add **Approvals** with appropriate approvers
+> **Important:** The `prod-rollback` environment is required for the rollback stage. The pipeline will fail if it doesn't exist.
 
 ---
 
@@ -351,66 +322,64 @@ Run pipelines in this order:
 
 ### 7.2 Blue-Green Pipeline Stages
 
+Only **1 pipeline** is needed. Each run auto-detects the active slot and deploys to the opposite one:
+
 ```
-Build → Deploy Dev → [Approve] → Deploy Test → [Approve] → Deploy Prod Blue → Deploy Prod Green → [Test & Approve] → Traffic Switch
+Build → Deploy Dev → [Approve] → Deploy Test → [Approve] → Deploy Prod (Inactive Slot) → [Test & Approve] → Switch Traffic → [Rollback if needed]
 ```
 
 | Stage | Description |
 |-------|-------------|
-| Build | Builds and pushes Docker image to ACR |
+| Build | Builds and pushes Docker image to Dev ACR |
 | Deploy Dev | Standard deployment to dev namespace |
-| Deploy Test | Standard deployment to test namespace (with image promotion) |
-| Deploy Prod Green | Deploys to Green slot (inactive) |
-| Deploy Prod Blue | Deploys to Blue slot |
-| Test Blue/Green | Manual validation of both deployments |
-| Traffic Switch | Switches service selector to new slot |
+| Approve Testing | Manual gate before promoting to test |
+| Deploy Test | Deploys to test namespace (promotes image from Dev ACR to Test ACR) |
+| Approve Prod | Manual gate before production deployment |
+| Deploy Prod (Inactive Slot) | Detects active slot, deploys to the opposite slot (promotes image from Test ACR to Prod ACR) |
+| Test & Approve Traffic Switch | Manual validation — new version is running but not receiving traffic yet |
+| Switch Traffic | Patches the service selector to route traffic to the new slot (instant, no pod restarts) |
+| Rollback | Manual gate — approve only if you need to switch traffic back to the previous slot |
 
-### 7.3 Testing Before Traffic Switch
+### 7.3 How the Slot Alternation Works
 
-After the blue and green deployments are complete, test both slots before approving traffic switch:
+- **Run 1** (first ever): No slot exists → deploys to `blue` → switches traffic to `blue`
+- **Run 2**: Detects `blue` active → deploys to `green` → switches traffic to `green`
+- **Run 3**: Detects `green` active → deploys to `blue` → switches traffic to `blue`
+- ...and so on, alternating automatically.
+
+### 7.4 Testing Before Traffic Switch
+
+After the inactive slot deployment completes, verify before approving the traffic switch:
 
 ```bash
-# Check both deployments are running
+# Check deployments
 kubectl get deployments -n prod -l app=frontend-service
-
-# Expected output:
-# NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-# frontend-service-blue   2/2     2            2           5m
-# frontend-service-green  2/2     2            2           10m
 
 # Check pods for each slot
 kubectl get pods -n prod -l app=frontend-service
 
-# Check service selector (shows which slot receives traffic)
+# Check which slot currently receives traffic
 kubectl get svc frontend-service -n prod -o jsonpath='{.spec.selector}'
 ```
 
-### 7.4 Manual Traffic Switch Approval
-
-During the `TestProdBlueGreen` stage:
-
-1. ADO displays test URLs for both blue and green deployments
-2. Manually test both deployments:
-   - Health endpoints
-   - API functionality
-   - Performance metrics
-3. Review the checklist displayed in the approval task
-4. Approve to switch traffic to the new slot
-
 ### 7.5 Instant Rollback
 
-If issues are discovered after traffic switch:
+If issues are discovered after switching traffic, you have 3 options:
 
+1. **Approve the Rollback stage** in the current pipeline run — it will switch traffic back to the previous slot
+
+2. **Run the pipeline again** — it will deploy to the other slot and switch traffic after approval
+
+3. **Manually via kubectl**:
 ```bash
-# Get current active slot
+# Check current active slot
 kubectl get svc frontend-service -n prod -o jsonpath='{.spec.selector.slot}'
 
-# Switch back to previous slot instantly (no pod restarts)
-# If current is "blue", switch to "green" (or vice versa)
-kubectl patch svc frontend-service -n prod -p '{"spec":{"selector":{"slot":"green"}}}'
+# Switch to the other slot (replace "blue" with the target slot)
+kubectl patch svc frontend-service -n prod -p '{"spec":{"selector":{"slot":"blue"}}}' --type=strategic
 ```
 
-Or trigger the manual rollback stage in the pipeline.
+Rollback is instant — no pod restarts. Both slots remain running.
 
 ---
 
@@ -418,14 +387,12 @@ Or trigger the manual rollback stage in the pipeline.
 
 Before approving traffic switch:
 
-- [ ] Blue deployment health check passes
-- [ ] Green deployment health check passes
+- [ ] New slot deployment health check passes
 - [ ] Smoke tests completed on new deployment
 - [ ] Performance metrics within acceptable limits
 - [ ] No critical errors in logs
-- [ ] Previous deployment still running (fallback ready)
+- [ ] Previous slot still running (rollback ready)
 - [ ] Stakeholder sign-off obtained
-- [ ] Rollback plan confirmed
 
 ---
 
@@ -436,7 +403,7 @@ Before approving traffic switch:
 # Verify AKS has AcrPull access (already set by ARM template, but check if broken)
 AKS_IDENTITY=$(az aks show -g rg-latina -n aks-latina-shared \
   --query identityProfile.kubeletidentity.objectId -o tsv)
-ACR_ID=$(az acr show --name acrlatinalatina --query id -o tsv)
+ACR_ID=$(az acr show --name acrlatinaprod<uniqueSuffix> --query id -o tsv)
 az role assignment create --assignee $AKS_IDENTITY --role AcrPull --scope $ACR_ID
 ```
 
