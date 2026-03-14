@@ -230,18 +230,17 @@ stages:
       - job: SwitchTraffic
         displayName: 'Switch Traffic to $(targetSlot)'
         steps:
+          - task: KubeloginInstaller@0
+            displayName: 'Install Kubelogin'
+
           # Patch service selector to route to new slot
-          - task: KubernetesManifest@1
+          - task: Kubernetes@1
             displayName: 'Patch Service Selector to $(targetSlot)'
             inputs:
-              action: 'patch'
-              connectionType: 'kubernetesServiceConnection'
-              kubernetesServiceConnection: '$(aksServiceConnection)'
-              namespace: 'prod'
-              resourceToPatch: 'name'
-              resourceName: 'services/frontend-service'
-              mergeStrategy: 'strategic'
-              patch: '{"spec":{"selector":{"slot":"$(targetSlot)"}}}'
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceEndpoint: '$(aksServiceConnection)'
+              command: 'patch'
+              arguments: 'svc frontend-service -n prod -p "{\"spec\":{\"selector\":{\"slot\":\"$(targetSlot)\"}}}" --type=strategic'
 
           # Verify endpoints are populated
           - task: Kubernetes@1
